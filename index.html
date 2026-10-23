@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Votación</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<main>
+  <section id="cargando"><p class="nota">Cargando…</p></section>
+
+  <section id="cerrada" hidden>
+    <h1 class="titulo"></h1>
+    <p>La votación todavía no está abierta.</p>
+    <p class="nota">Esta pantalla se actualiza sola.</p>
+  </section>
+
+  <section id="nombre" hidden>
+    <div class="barra"><i></i></div>
+    <h1 class="titulo"></h1>
+    <p class="nota">Se vota una sola vez, con tu nombre y apellido.</p>
+    <form id="f-nombre" novalidate>
+      <label>Nombre<input id="nom" maxlength="24" autocomplete="given-name"></label>
+      <label>Apellido<input id="ape" maxlength="24" autocomplete="family-name"></label>
+      <p id="n-error" class="error" hidden>Escribe tu nombre y tu apellido.</p>
+      <button class="primario">Empezar</button>
+    </form>
+  </section>
+
+  <section id="pregunta" hidden>
+    <div class="barra"><i></i></div>
+    <p id="q-paso" class="paso"></p>
+    <h2 id="q-t"></h2>
+    <p id="q-nota" class="nota"></p>
+    <div id="q-o" class="opciones"></div>
+    <button id="atras" class="enlace">Atrás</button>
+  </section>
+
+  <section id="resumen" hidden>
+    <div class="barra"><i></i></div>
+    <h2>Revisa tu voto</h2>
+    <ul id="r-lista" class="lista"></ul>
+    <p id="r-error" class="error" hidden></p>
+    <button id="enviar" class="primario">Enviar voto</button>
+    <button id="cambiar" class="enlace">Cambiar</button>
+  </section>
+
+  <section id="listo" hidden>
+    <h2 id="l-t">¡Gracias!</h2>
+    <p>Tu voto quedó registrado.</p>
+    <ul id="l-lista" class="lista"></ul>
+  </section>
+
+  <section id="sin-red" hidden>
+    <h2>No se pudo conectar</h2>
+    <p class="nota">Revisa tu conexión y recarga la página.</p>
+  </section>
+</main>
+
+<script type="module">
+import { $, esc, mostrar, entrar, r, raiz, ruta, get, update, onValue, serverTimestamp, normal, opciones, SALAS } from './comun.js';
+
+const N = SALAS.length;
+const GUARDADO = 'votacion-voto';
+let cfg, abierta, votado, uid, paso = 0, voto = [], nombre = '', apellido = '';
+
+const listaVoto = (v) => cfg.preguntas.map((p, i) => `<li><span>${esc(p.c)}</span><b>${esc(opciones(cfg, i)[v[i]]?.t ?? '')}</b></li>`).join('');
+
+function refrescar() {
+  if (!cfg || abierta === undefined) return;
+  document.querySelectorAll('.titulo').forEach((h) => (h.textContent = cfg.titulo));
+  if (votado) return listo();
+  if (!abierta) return mostrar('cerrada');
+  pintar();
+}
+
+// paso 0: nombre · 1..N: preguntas · N+1: resumen
+function pintar() {
+  const falta = voto.findIndex((k, i) => k >= opciones(cfg, i).length); // si el anfitrión quitó la opción elegida
+  if (falta >= 0) { voto[falta] = undefined; paso = Math.min(paso, falta + 1); }
+  document.querySelectorAll('.barra i').forEach((b) => (b.style.width = `${(paso / (N + 1)) * 100}%`));
+  if (paso === 0) return mostrar('nombre');
+  if (paso > N) {
+    $('#r-lista').innerHTML = `<li><span>Nombre</span><b>${esc(nombre)} ${esc(apellido)}</b></li>${listaVoto(voto)}`;
+    return mostrar('resumen');
+  }
+  const i = paso - 1, p = cfg.preguntas[i];
+  $('#q-paso').textContent = `Pregunta ${paso} de ${N}`;
+  $('#q-t').textContent = p.t;
+  $('#q-nota').textContent = p.nota || '';
+  $('#q-o').innerHTML = opciones(cfg, i).map((o, k) =>
+    `<button data-k="${k}"${voto[i] === k ? ' class="elegida"' : ''}><b>${esc(o.t)}</b>${o.d ? `<span>${esc(o.d)}</span>` : ''}</button>`).join('');
+  mostrar('pregunta');
+}
+
+function listo() {
+  const g = JSON.parse(localStorage.getItem(GUARDADO) || 'null');
+  $('#l-t').textContent = g ? `¡Gracias, ${g.nombre}!` : '¡Gracias!';
+  $('#l-lista').innerHTML = g ? listaVoto(g.voto) : '';
+  mostrar('listo');
+}
+
+const limpio = (s) => s.trim().replace(/\s+/g, ' ');
+const valido = (s) => /^[^<>&"]{2,24}$/.test(s);
+$('#f-nombre').onsubmit = (e) => {
+  e.preventDefault();
+  nombre = limpio($('#nom').value);
+  apellido = limpio($('#ape').value);
+  $('#n-error').hidden = valido(nombre) && valido(apellido);
+  if (!$('#n-error').hidden) return;
+  paso = 1;
+  pintar();
+};
+$('#q-o').onclick = (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  voto[paso - 1] = +b.dataset.k;
+  paso++;
+  pintar();
+};
+$('#atras').onclick = () => { paso--; pintar(); };
+$('#cambiar').onclick = () => { paso = 1; pintar(); };
+
+$('#enviar').onclick = async () => {
+  const boton = $('#enviar');
+  boton.disabled = true;
+  $('#r-error').hidden = true;
+  try {
+    const sala = (await get(r(0))).val() || {};
+    const yo = normal(`${nombre} ${apellido}`);
+    const repetido = Object.keys(sala.respuestas?.v || {}).some((u) => {
+      const j = sala.jugadores?.[u];
+      return u !== uid && j && normal(`${j.nombre} ${j.apellido}`) === yo;
+    });
+    if (repetido) throw Object.assign(new Error(`Ya hay un voto con el nombre ${nombre} ${apellido}. Se vota una sola vez.`), { propio: true });
+    // Primero el nombre en las salas y luego el voto: las reglas piden que el jugador ya exista.
+    await update(raiz, Object.fromEntries(SALAS.map((_, i) => [ruta(i, 'jugadores', uid), { nombre, apellido }])));
+    await update(raiz, Object.fromEntries(SALAS.map((_, i) => [ruta(i, 'respuestas', 'v', uid), { o: voto[i], t: serverTimestamp() }])));
+    localStorage.setItem(GUARDADO, JSON.stringify({ nombre, voto }));
+    votado = true;
+    listo();
+  } catch (e) {
+    $('#r-error').textContent = e.propio ? e.message
+      : abierta ? 'No se pudo enviar. Revisa tu conexión e inténtalo otra vez.' : 'La votación ya se cerró.';
+    $('#r-error').hidden = false;
+  } finally {
+    boton.disabled = false;
+  }
+};
+
+try {
+  uid = await entrar();
+  votado = (await get(r(0, 'respuestas', 'v', uid))).exists();
+  onValue(r(0, 'config'), (s) => { cfg = s.val(); refrescar(); });
+  onValue(r(0, 'estado'), (s) => { abierta = s.val()?.fase === 'pregunta'; refrescar(); });
+} catch {
+  mostrar('sin-red');
+}
+</script>
+</body>
+</html>

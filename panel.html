@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Panel de votación</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<main>
+  <section id="cargando"><p class="nota">Cargando…</p></section>
+
+  <section id="llave" hidden>
+    <h1>Panel de votación</h1>
+    <form id="f-llave">
+      <label>Clave<input id="clave" type="password" autocomplete="current-password"></label>
+      <p id="k-error" class="error" hidden>Clave incorrecta.</p>
+      <button class="primario">Entrar</button>
+    </form>
+  </section>
+
+  <section id="panel" class="ancho" hidden>
+    <div class="cab">
+      <div><h1 id="titulo"></h1><span id="estado" class="chip"></span></div>
+      <div><span class="cuenta" id="n-votos">0</span><span>votos</span><button id="abrir" class="primario"></button></div>
+    </div>
+    <div class="url"><code id="url"></code><button id="copiar" class="secundario">Copiar enlace</button></div>
+    <div class="cols">
+      <div id="resultados"></div>
+      <aside>
+        <h3>Puntajes</h3>
+        <p class="nota" id="p-total"></p>
+        <div id="puntajes"></div>
+        <button id="mas" class="secundario">Agregar opción</button>
+        <button id="guardar" class="primario">Guardar puntajes</button>
+        <p id="p-msg" class="nota"></p>
+      </aside>
+    </div>
+    <h3>Votos</h3>
+    <table id="votos"></table>
+    <div class="pie">
+      <button id="csv" class="secundario">Descargar CSV</button>
+      <button id="borrar" class="enlace">Borrar todos los votos</button>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { $, esc, mostrar, entrar, r, ruta, onValue, normal, opciones, SALAS, CONFIG } from './comun.js';
+import { HOST } from './acceso.js';
+
+const DUR = 120 * 864e5; // abierta, la votación acepta votos hasta 120 días
+const MAX = 4;           // las reglas aceptan opciones 0..3
+const u8 = (b) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+let refresh, tok = { v: '', hasta: 0 }, salas = [], cfg, editando = false;
+
+async function abrir(clave) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(clave), 'PBKDF2', false, ['deriveKey']);
+  const llave = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: u8(HOST.sal), iterations: 200000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u8(HOST.iv) }, llave, u8(HOST.d)));
+}
+
+// Las escrituras van por REST con la sesión anónima que creó las salas, la única dueña de las tres.
+async function escribir(cambios) {
+  if (Date.now() > tok.hasta) {
+    const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${CONFIG.apiKey}`,
+      { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refresh }) });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error?.message);
+    tok = { v: j.id_token, hasta: Date.now() + (j.expires_in - 300) * 1000 };
+  }
+  const res = await fetch(`${CONFIG.databaseURL}/.json?auth=${tok.v}`, { method: 'PATCH', body: JSON.stringify(cambios) });
+  if (!res.ok) throw new Error((await res.json()).error);
+}
+const fallo = (e) => alert('No se pudo guardar: ' + e.message);
+const porSala = (f) => Object.fromEntries(SALAS.flatMap((_, i) => f(i)));
+
+// Votos completos en orden de llegada; si un nombre se repite, solo cuenta el primero.
+function votos() {
+  const a = salas[0], vistos = new Set();
+  return Object.entries(a.respuestas?.v || {})
+    .map(([u, x]) => {
+      const j = a.jugadores?.[u] || {};
+      return { u, t: x.t, n: j.nombre ?? '?', a: j.apellido ?? '', o: salas.map((s) => s.respuestas?.v?.[u]?.o) };
+    })
+    .sort((x, y) => x.t - y.t)
+    .map((v) => {
+      const k = normal(`${v.n} ${v.a}`);
+      v.repetido = vistos.has(k);
+      vistos.add(k);
+      return v;
+    });
+}
+
+function pintar() {
+  cfg = salas[0]?.config;
+  if (!cfg || salas.filter(Boolean).length < SALAS.length) return;
+  const abierta = salas[0].estado?.fase === 'pregunta';
+  const lista = votos(), validos = lista.filter((v) => !v.repetido);
+  $('#titulo').textContent = cfg.titulo;
+  $('#estado').textContent = abierta ? 'Abierta' : 'Cerrada';
+  $('#estado').classList.toggle('on', abierta);
+  $('#abrir').textContent = abierta ? 'Cerrar votación' : 'Abrir votación';
+  $('#n-votos').textContent = validos.length;
+  $('#p-total').textContent = `Cada opción suma ${cfg.total} puntos.`;
+
+  $('#resultados').innerHTML = cfg.preguntas.map((p, i) => {
+    const ops = opciones(cfg, i), c = ops.map((_, k) => validos.filter((v) => v.o[i] === k).length), max = Math.max(...c);
+    return `<div class="res"><h3>${esc(p.t)}</h3>${ops.map((o, k) => `<div class="fila${c[k] && c[k] === max ? ' gana' : ''}">
+      <span>${esc(o.t)}</span><div class="pista"><i style="width:${(c[k] / Math.max(1, validos.length)) * 100}%"></i></div><b>${c[k]}</b></div>`).join('')}</div>`;
+  }).join('');
+
+  $('#votos').innerHTML = !lista.length ? '<tr><td class="nota">Todavía no hay votos.</td></tr>'
+    : `<tr><th>#</th><th>Nombre</th>${cfg.preguntas.map((p) => `<th>${esc(p.c)}</th>`).join('')}<th></th></tr>`
+      + lista.map((v, n) => `<tr${v.repetido ? ' class="repetido"' : ''}><td>${n + 1}</td>
+        <td>${esc(v.n)} ${esc(v.a)}${v.repetido ? ' <small>(repetido, no cuenta)</small>' : ''}</td>
+        ${v.o.map((k, i) => `<td>${esc(opciones(cfg, i)[k]?.t ?? '—')}</td>`).join('')}
+        <td><button class="quitar" data-u="${esc(v.u)}">Quitar</button></td></tr>`).join('');
+
+  if (!editando) pintarPuntajes(cfg.puntajes);
+}
+
+function pintarPuntajes(pares) {
+  $('#puntajes').innerHTML = pares.map(([p, t]) => `<div class="par">
+    <label>Práctico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${p}"></label>
+    <label>Teórico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${t}"></label>
+    <button class="quitar"${pares.length <= 2 ? ' disabled' : ''}>Quitar</button></div>`).join('');
+  $('#mas').disabled = pares.length >= MAX;
+}
+const leerPares = () => [...document.querySelectorAll('.par')].map((f) => [...f.querySelectorAll('input')].map((i) => i.value && +i.value));
+
+$('#puntajes').oninput = (e) => {
+  editando = true;
+  $('#p-msg').textContent = 'Cambios sin guardar.';
+  const [p, t] = e.target.closest('.par').querySelectorAll('input');
+  (e.target === p ? t : p).value = cfg.total - e.target.value;
+};
+$('#puntajes').onclick = (e) => {
+  const b = e.target.closest('.quitar');
+  if (!b) return;
+  b.closest('.par').remove();
+  editando = true;
+  pintarPuntajes(leerPares());
+};
+$('#mas').onclick = () => {
+  editando = true;
+  pintarPuntajes([...leerPares(), ['', '']]);
+};
+$('#guardar').onclick = async () => {
+  const pares = leerPares();
+  if (pares.some(([p, t]) => !(p > 0 && t > 0) || p + t !== cfg.total)) return ($('#p-msg').textContent = `Cada opción debe sumar ${cfg.total} y no llevar ceros.`);
+  if (new Set(pares.map(String)).size < pares.length) return ($('#p-msg').textContent = 'Hay opciones repetidas.');
+  if (votos().length && !confirm('Ya hay votos. Cada voto se queda con la opción que esté en su misma posición. ¿Guardar igual?')) return;
+  try {
+    await escribir({ [ruta(0, 'config', 'puntajes')]: pares });
+    editando = false;
+    $('#p-msg').textContent = 'Puntajes guardados.';
+  } catch (e) { fallo(e); }
+};
+
+$('#abrir').onclick = () => {
+  const abierta = salas[0].estado?.fase === 'pregunta';
+  escribir(porSala((i) => [[ruta(i, 'estado'), abierta ? { fase: 'cerrada' }
+    : { fase: 'pregunta', qk: 'v', inicio: { '.sv': 'timestamp' }, dur: DUR }]])).catch(fallo);
+};
+$('#votos').onclick = (e) => {
+  const u = e.target.closest('.quitar')?.dataset.u, v = votos().find((x) => x.u === u);
+  if (v && confirm(`¿Quitar el voto de ${v.n} ${v.a}?`))
+    escribir(porSala((i) => [[ruta(i, 'jugadores', u), null], [ruta(i, 'respuestas', 'v', u), null]])).catch(fallo);
+};
+$('#borrar').onclick = () => {
+  if (confirm('¿Borrar TODOS los votos? No se puede deshacer. Descarga antes el CSV si lo necesitas.'))
+    escribir(porSala((i) => [[ruta(i, 'jugadores'), null], [ruta(i, 'respuestas'), null]])).catch(fallo);
+};
+$('#copiar').onclick = async () => {
+  await navigator.clipboard.writeText($('#url').textContent);
+  $('#copiar').textContent = 'Copiado';
+  setTimeout(() => ($('#copiar').textContent = 'Copiar enlace'), 1500);
+};
+$('#csv').onclick = () => {
+  const filas = [['Nombre', 'Apellido', ...cfg.preguntas.map((p) => p.c), 'Hora', 'Cuenta'],
+    ...votos().map((v) => [v.n, v.a, ...v.o.map((k, i) => opciones(cfg, i)[k]?.t ?? ''), new Date(v.t).toLocaleString('es-EC'), v.repetido ? 'no' : 'sí'])];
+  const csv = '﻿' + filas.map((f) => f.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: 'votacion.csv' });
+  a.click();
+};
+
+async function entrarPanel(clave) {
+  try { refresh = await abrir(clave); } catch {
+    sessionStorage.removeItem('votacion-clave');
+    $('#k-error').hidden = !clave;
+    return mostrar('llave');
+  }
+  sessionStorage.setItem('votacion-clave', clave);
+  history.replaceState(null, '', location.pathname);
+  $('#url').textContent = new URL('./', location.href).href;
+  mostrar('panel');
+  await entrar();
+  SALAS.forEach((_, i) => onValue(r(i), (s) => { salas[i] = s.val() || {}; pintar(); }));
+}
+$('#f-llave').onsubmit = (e) => { e.preventDefault(); entrarPanel($('#clave').value.trim()); };
+entrarPanel(new URLSearchParams(location.hash.slice(1)).get('clave') || sessionStorage.getItem('votacion-clave') || '');
+</script>
+</body>
+</html>
