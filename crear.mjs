@@ -1,7 +1,7 @@
-// Crea la votación o actualiza sus textos. Uso: node crear.mjs
-// Primera vez: crea un usuario anfitrión anónimo, las salas (cerradas) y acceso.js con su sesión
-// cifrada con la clave (CLAVE-DOCENTE.txt). Después: vuelve a subir titulo y preguntas de
-// encuesta.json; los puntajes los cambia el anfitrión desde el panel.
+// Crea la votación. Uso: node crear.mjs
+// Crea un usuario anfitrión anónimo, las salas (cerradas) con los textos de encuesta.json y
+// acceso.js con su sesión cifrada con la clave (CLAVE-DOCENTE.txt). Si las salas ya existen no
+// toca nada: preguntas, opciones y puntajes se cambian desde el panel.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 const aqui = (f) => new URL(f, import.meta.url);
@@ -61,8 +61,5 @@ for (const [i, s] of SALAS.entries()) {
     const config = i === 0 ? { config: { titulo: enc.titulo, total: enc.total, puntajes: enc.puntajes, preguntas: enc.preguntas } } : {};
     await db('PUT', `salas/${s}`, { host: tok.user_id, creada: { '.sv': 'timestamp' }, estado: { fase: 'cerrada' }, ...config });
     console.log(`sala ${s} creada`);
-  } else if (i === 0) {
-    await db('PATCH', `salas/${s}/config`, { titulo: enc.titulo, preguntas: enc.preguntas });
-    console.log('textos actualizados');
-  }
+  } else console.log(`sala ${s} ya existe`);
 }

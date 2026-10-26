@@ -30,17 +30,14 @@
       <div><span class="cuenta" id="n-votos">0</span><span>votos</span><button id="abrir" class="primario"></button></div>
     </div>
     <div class="url"><code id="url"></code><button id="copiar" class="secundario">Copiar enlace</button></div>
-    <div class="cols">
-      <div id="resultados"></div>
-      <aside>
-        <h3>Puntajes</h3>
-        <p class="nota" id="p-total"></p>
-        <div id="puntajes"></div>
-        <button id="mas" class="secundario">Agregar opción</button>
-        <button id="guardar" class="primario">Guardar puntajes</button>
-        <p id="p-msg" class="nota"></p>
-      </aside>
-    </div>
+    <div id="resultados"></div>
+    <details id="editor" class="editor">
+      <summary>Editar opciones y puntajes</summary>
+      <div id="ed" class="ed-grid"></div>
+      <p id="e-msg" class="error"></p>
+      <p id="e-ok" class="ok" hidden>Cambios guardados. Los celulares ya muestran las opciones nuevas.</p>
+      <div class="pie"><button id="guardar" class="primario">Guardar cambios</button><button id="descartar" class="enlace">Descartar cambios</button></div>
+    </details>
     <h3>Votos</h3>
     <table id="votos"></table>
     <div class="pie">
@@ -108,7 +105,6 @@ function pintar() {
   $('#estado').classList.toggle('on', abierta);
   $('#abrir').textContent = abierta ? 'Cerrar votación' : 'Abrir votación';
   $('#n-votos').textContent = validos.length;
-  $('#p-total').textContent = `Cada opción suma ${cfg.total} puntos.`;
 
   $('#resultados').innerHTML = cfg.preguntas.map((p, i) => {
     const ops = opciones(cfg, i), c = ops.map((_, k) => validos.filter((v) => v.o[i] === k).length), max = Math.max(...c);
@@ -123,44 +119,97 @@ function pintar() {
         ${v.o.map((k, i) => `<td>${esc(opciones(cfg, i)[k]?.t ?? '—')}</td>`).join('')}
         <td><button class="quitar" data-u="${esc(v.u)}">Quitar</button></td></tr>`).join('');
 
-  if (!editando) pintarPuntajes(cfg.puntajes);
+  if (!editando) pintarEditor(cfg);
 }
 
-function pintarPuntajes(pares) {
-  $('#puntajes').innerHTML = pares.map(([p, t]) => `<div class="par">
-    <label>Práctico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${p}"></label>
-    <label>Teórico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${t}"></label>
-    <button class="quitar"${pares.length <= 2 ? ' disabled' : ''}>Quitar</button></div>`).join('');
-  $('#mas').disabled = pares.length >= MAX;
+// Editor: textos de cada pregunta, sus opciones y los pares de puntaje. Textos cortos para que
+// la votación siga entrando en la pantalla del celular sin desplazarse.
+function pintarEditor({ preguntas, puntajes }) {
+  $('#ed').innerHTML = preguntas.map((p, i) => {
+    const filas = p.puntajes ? puntajes : p.o;
+    return `<div class="ed-q">
+    <p class="paso">Pregunta ${i + 1} · ${esc(p.c)}</p>
+    <label>Pregunta<input class="q-t" maxlength="60" value="${esc(p.t)}"></label>
+    <label>Aclaración<textarea class="q-nota" rows="2" maxlength="100">${esc(p.nota || '')}</textarea></label>
+    ${p.puntajes
+      ? `<p class="nota">Cada opción suma ${cfg.total} puntos.</p>` + puntajes.map(([a, b]) => `<div class="par">
+        <label>Práctico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${a}"></label>
+        <label>Teórico<input type="number" min="0" max="${cfg.total}" step="0.5" value="${b}"></label>
+        <button class="quitar"${filas.length <= 2 ? ' disabled' : ''}>Quitar</button></div>`).join('')
+      : p.o.map((o) => `<div class="ed-op">
+        <input class="o-t" maxlength="35" placeholder="Opción" value="${esc(o.t)}">
+        <button class="quitar"${filas.length <= 2 ? ' disabled' : ''}>Quitar</button>
+        <textarea class="o-d" rows="2" maxlength="60" placeholder="Detalle (opcional)">${esc(o.d || '')}</textarea></div>`).join('')}
+    <button class="secundario mas"${filas.length >= MAX ? ' disabled' : ''}>Agregar opción</button></div>`;
+  }).join('');
 }
-const leerPares = () => [...document.querySelectorAll('.par')].map((f) => [...f.querySelectorAll('input')].map((i) => i.value && +i.value));
 
-$('#puntajes').oninput = (e) => {
-  editando = true;
-  $('#p-msg').textContent = 'Cambios sin guardar.';
-  const [p, t] = e.target.closest('.par').querySelectorAll('input');
-  (e.target === p ? t : p).value = cfg.total - e.target.value;
+function leerEditor() {
+  const puntajes = [...$('#ed').querySelectorAll('.par')].map((f) => [...f.querySelectorAll('input')].map((i) => i.value && +i.value));
+  const preguntas = [...$('#ed').querySelectorAll('.ed-q')].map((q, i) => {
+    const p = { ...cfg.preguntas[i], t: q.querySelector('.q-t').value.trim(), nota: q.querySelector('.q-nota').value.trim() };
+    if (!p.puntajes) p.o = [...q.querySelectorAll('.ed-op')].map((f) => {
+      const t = f.querySelector('.o-t').value.trim(), d = f.querySelector('.o-d').value.trim();
+      return d ? { t, d } : { t };
+    });
+    return p;
+  });
+  return { preguntas, puntajes };
+}
+
+function revisar({ preguntas, puntajes }) {
+  for (const [i, p] of preguntas.entries()) {
+    const n = `Pregunta ${i + 1}`;
+    if (!p.t) return `${n}: escribe la pregunta.`;
+    if (p.puntajes) {
+      if (puntajes.some(([a, b]) => !(a > 0 && b > 0) || Math.abs(a + b - cfg.total) > 1e-9)) return `${n}: cada opción debe sumar ${cfg.total} puntos, sin ceros.`;
+      if (new Set(puntajes.map(String)).size < puntajes.length) return `${n}: hay puntajes repetidos.`;
+    } else {
+      if (p.o.some((o) => !o.t)) return `${n}: hay una opción sin texto.`;
+      if (new Set(p.o.map((o) => normal(o.t))).size < p.o.length) return `${n}: hay opciones repetidas.`;
+    }
+  }
+}
+
+const sinGuardar = () => { editando = true; $('#e-msg').textContent = 'Hay cambios sin guardar.'; };
+$('#ed').oninput = (e) => {
+  sinGuardar();
+  const par = e.target.closest('.par');
+  if (!par) return;
+  const [p, t] = par.querySelectorAll('input');
+  (e.target === p ? t : p).value = e.target.value === '' ? '' : +(cfg.total - e.target.value).toFixed(2);
 };
-$('#puntajes').onclick = (e) => {
-  const b = e.target.closest('.quitar');
+$('#ed').onclick = (e) => {
+  const b = e.target.closest('button');
   if (!b) return;
-  b.closest('.par').remove();
-  editando = true;
-  pintarPuntajes(leerPares());
+  sinGuardar();
+  if (b.classList.contains('quitar')) b.closest('.par, .ed-op').remove();
+  const datos = leerEditor();
+  if (b.classList.contains('mas')) {
+    const p = datos.preguntas[[...$('#ed').children].indexOf(b.closest('.ed-q'))];
+    p.puntajes ? datos.puntajes.push(['', '']) : p.o.push({ t: '' });
+  }
+  pintarEditor(datos);
 };
-$('#mas').onclick = () => {
-  editando = true;
-  pintarPuntajes([...leerPares(), ['', '']]);
+$('#descartar').onclick = () => {
+  editando = false;
+  $('#e-msg').textContent = '';
+  pintarEditor(cfg);
 };
 $('#guardar').onclick = async () => {
-  const pares = leerPares();
-  if (pares.some(([p, t]) => !(p > 0 && t > 0) || p + t !== cfg.total)) return ($('#p-msg').textContent = `Cada opción debe sumar ${cfg.total} y no llevar ceros.`);
-  if (new Set(pares.map(String)).size < pares.length) return ($('#p-msg').textContent = 'Hay opciones repetidas.');
-  if (votos().length && !confirm('Ya hay votos. Cada voto se queda con la opción que esté en su misma posición. ¿Guardar igual?')) return;
+  const datos = leerEditor(), error = revisar(datos);
+  if (error) return ($('#e-msg').textContent = error);
+  const nuevo = { ...cfg, ...datos }, n = votos().length;
+  const resumen = datos.preguntas.map((p, i) => `${i + 1}. ${p.t}\n`
+    + opciones(nuevo, i).map((o) => `   - ${o.t}${o.d ? ` (${o.d})` : ''}`).join('\n')).join('\n\n');
+  if (!confirm(`¿Confirmas estos cambios? Los celulares los verán al momento.\n\n${resumen}`
+    + (n ? `\n\nYa hay ${n} voto(s): cada voto se queda con la opción que esté en su misma posición.` : ''))) return;
   try {
-    await escribir({ [ruta(0, 'config', 'puntajes')]: pares });
+    await escribir({ [ruta(0, 'config', 'preguntas')]: datos.preguntas, [ruta(0, 'config', 'puntajes')]: datos.puntajes });
     editando = false;
-    $('#p-msg').textContent = 'Puntajes guardados.';
+    $('#e-msg').textContent = '';
+    $('#e-ok').hidden = false;
+    setTimeout(() => ($('#e-ok').hidden = true), 4000);
   } catch (e) { fallo(e); }
 };
 

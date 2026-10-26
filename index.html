@@ -63,11 +63,22 @@
 </main>
 
 <script type="module">
-import { $, esc, mostrar, entrar, r, raiz, ruta, get, update, onValue, serverTimestamp, normal, opciones, SALAS } from './comun.js';
+import { $, esc, mostrar as mostrarSeccion, entrar, r, raiz, ruta, get, update, onValue, serverTimestamp, normal, opciones, SALAS } from './comun.js';
 
 const N = SALAS.length;
 const GUARDADO = 'votacion-voto';
 let cfg, abierta, votado, uid, paso = 0, voto = [], nombre = '', apellido = '';
+
+// Si los textos que puso el anfitrión no entran en la pantalla, la tarjeta se achica hasta que entren.
+function ajustar() {
+  const tarjeta = document.querySelector('main > section:not([hidden])');
+  for (let z = 100; z >= 70; z -= 5) {
+    tarjeta.style.zoom = z / 100;
+    if (document.documentElement.scrollHeight <= innerHeight) return;
+  }
+}
+const mostrar = (id) => { mostrarSeccion(id); ajustar(); };
+addEventListener('resize', ajustar);
 
 const listaVoto = (v) => cfg.preguntas.map((p, i) => `<li><span>${esc(p.c)}</span><b>${esc(opciones(cfg, i)[v[i]]?.t ?? '')}</b></li>`).join('');
 
