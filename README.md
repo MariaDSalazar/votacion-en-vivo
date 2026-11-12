@@ -4,7 +4,7 @@ Votación corta con resultados al momento. Cada persona vota una sola vez, con s
 
 ## Cómo se usa
 
-1. El anfitrión abre `panel.html` con su clave (o con el enlace `panel.html#clave=<clave>`), ajusta en «Editar opciones y puntajes» las preguntas, sus opciones y los pares de puntaje, confirma los cambios y abre la votación.
+1. El anfitrión abre `panel.html` con su clave (o con el enlace `panel.html#clave=` seguido de la clave), ajusta en `Editar opciones y puntajes` las preguntas, sus opciones y los pares de puntaje, confirma los cambios y abre la votación.
 2. Cada persona abre la página principal en su celular, escribe su nombre y apellido y responde una pregunta por pantalla.
 3. El panel muestra los resultados en vivo. Si un nombre se repite, solo cuenta el primer voto; se pueden quitar votos y descargar un CSV.
 
